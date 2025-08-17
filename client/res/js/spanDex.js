@@ -1,26 +1,140 @@
-import L, {Map, CRS, ImageOverlay, TileLayer} from 'leaflet';
+import L, {Map, CRS, ImageOverlay, TileLayer, GridLayer, Control} from 'leaflet';
+const TILE_SIZE = 512;
+
+const SpanDexControl = Control.extend({
+	initialize(elem) {
+		this.elem = elem;
+	},
+
+	onAdd: function(map) {
+		this.options.position = this.elem.getAttribute("leaflet-alignment");
+		return this.elem;
+	},
+
+	onRemove: function(map) {
+		// Nothing to do here
+	}
+});
+
+class CanvasLayer extends GridLayer {
+	createTile(coords/*, done*/) {
+		const error = null;
+
+		// create a <canvas> element for drawing
+		const tile = L.DomUtil.create("canvas", "leaflet-tile");
+
+		// setup tile width and height according to the options
+		const size = this.getTileSize();
+		tile.width = size.x;
+		tile.height = size.y;
+
+		if (SpanDex.debug) {
+			let ctx = tile.getContext("2d");
+			ctx.font = "16px monospace";
+			ctx.fillText(`${coords.y}:${coords.x}`,0,16,TILE_SIZE);
+		}
+
+		// draw something asynchronously and pass the tile to the done() callback
+		// do this when a server exists
+		/*setTimeout(function() {
+			done(error, tile);
+		}, 10);*/
+
+		return tile;
+	}
+}
 
 class UI {
 	static Initialize() {
 		this.map = new Map("map", {
 			crs: CRS.Simple,
-			minZoom: -2,
-			maxZoom: 8
+			minZoom: 0,
+			maxZoom: 6
 		});
-		this.map.setView( [256, 256], 0);
-		new ImageOverlay("https://block57.net/_res/img/test.png", [[0, 0], [512, 512]], {className: "pointFiltered"}).addTo(this.map);
+		this.map.setView( [0, 0], 0);
+		//new ImageOverlay("res/img/uv.png", [[0, 0], [TILE_SIZE, TILE_SIZE]], {className: "pointFiltered"}).addTo(this.map);
+		/*new TileLayer("res/img/uv.png", {
+			tileSize: TILE_SIZE,
+			minNativeZoom: 0,
+			maxNativeZoom: 0,
+			className: "pointFiltered"
+		}).addTo(this.map);*/
+
+		this.canvasLayer = new CanvasLayer({
+			tileSize: TILE_SIZE,
+			minNativeZoom: 0,
+			maxNativeZoom: 0,
+			className: "pointFiltered"
+		}).addTo(this.map);
+		
+		/*this.canvasLayer.on("tileunload", (e) => {
+			console.log(e);
+		});*/
+
+		let controls = document.getElementById("controls");
+		if (controls != null) {
+			for (let i = 0; i < controls.children.length; i++) {
+				let child = controls.children[i];
+				let ctrl = new SpanDexControl(child);
+				ctrl.addTo(this.map);
+			}
+		}
+
+		document.getElementById("btnRecenter").onclick = () => { UI.map.setView([0, 0], 0); }
 	}
-}
+
+	static GetCanvasTileAtCoord(coord) {
+		// this is what Leaflet does lol
+		let key = `${coord[0]}:${coord[1]}:0`;
+		if (key in this.canvasLayer._tiles)
+			return this.canvasLayer._tiles[key].el;
+	}
+};
 
 class SpanDex {
 	static Initialize() {
-		console.log("bepis");
+		console.log("<span>Dex init");
+		this.debug = true;
+		this.testInterval = setInterval(this.TestInterval, 100);
 	}
-}
+
+	static TestInterval() {
+		const multy = TILE_SIZE;
+
+		for (let i = 0; i < 999; i++) {
+			let x = Math.floor(((Math.random() * 2) - 1) * multy);
+			let y = Math.floor(((Math.random() * 2) - 1) * multy);
+
+			SpanDex.PutColorAtPos([y, x], "#0047ab");
+		}
+	}
+
+	static PutColorAtPos(pos, col) {
+		// find tile pos
+		let tileCoord = [Math.floor(pos[0] / TILE_SIZE), Math.floor(pos[1] / TILE_SIZE)];
+
+		let tilePos = [Math.floor(pos[0] % TILE_SIZE), Math.floor(pos[1] % TILE_SIZE)];
+		tilePos[0] = tilePos[0] < 0 ? TILE_SIZE + tilePos[0] : tilePos[0];
+		tilePos[1] = tilePos[1] < 0 ? TILE_SIZE + tilePos[1] : tilePos[1];
+
+		//console.debug("Getting tile", tileCoord, "pos", tilePos);
+		let tileCanvas = UI.GetCanvasTileAtCoord(tileCoord);
+		// we don't know if the tile is on screen, so just draw there anyway
+		if (tileCanvas) {
+			let ctx = tileCanvas.getContext("2d");
+			ctx.fillStyle = col;
+			ctx.fillRect(tilePos[0], tilePos[1], 1, 1);
+			//console.debug("put pixel at", tilePos);
+		}
+		// tell the network
+	}
+};
 
 document.addEventListener("DOMContentLoaded", () => {
-	UI.Initialize();
 	SpanDex.Initialize();
+	UI.Initialize();
+
+	// nasty... can I avoid this?
+	window.UI = UI;
+	window.SpanDex = SpanDex;
 });
-
-
