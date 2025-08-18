@@ -1,2 +1,2 @@
-client/thirdparty/
-server/tiles/
+client/www/thirdparty/
+server/*/tiles/

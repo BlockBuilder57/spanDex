@@ -9,6 +9,10 @@ function jankyColorGetter(col) {
 	return arr;
 }
 
+function arrToRGBHex(arr) {
+	return "#" + arr[0].toString(16).padStart(2, "0") + arr[1].toString(16).padStart(2, "0") + arr[2].toString(16).padStart(2, "0")
+}
+
 const SpanDexControl = Control.extend({
 	initialize(elem) {
 		this.elem = elem;
@@ -109,8 +113,8 @@ class UI {
 	static GetCanvasTileAtCoord(coord) {
 		// this is what Leaflet does lol
 		let key = `${coord[0]}:${coord[1]}:0`;
-		if (key in this.canvasLayer._tiles)
-			return this.canvasLayer._tiles[key].el;
+		if (key in UI.canvasLayer._tiles)
+			return UI.canvasLayer._tiles[key].el;
 	}
 };
 
@@ -141,23 +145,29 @@ class WebSock {
 			let dv = new DataView(msg.buffer);
 
 			switch(msg[0]) {
-				case 0b000001:
-					//console.debug("config");
+				case 0b1000001:
 					SpanDex.tileSize = dv.getUint16(1);
+					//console.debug("config", "\ntileSize", SpanDex.tileSize);
 					UI.Initialize();
 					break;
-				case 0b000010:
-					//console.debug("tile");
-					let coord = [dv.getUint32(1), dv.getUint32(5)]
+				case 0b1000010:
+					let coord = [dv.getInt32(1), dv.getInt32(5)]
+					//console.debug("tile", coord);
 					let canv = UI.GetCanvasTileAtCoord(coord)
 					if (canv) {
 						let ctx = canv.getContext("2d")
 						for (let i = 0; i < SpanDex.tileSize * SpanDex.tileSize; i++) {
 							let rgb = [dv.getUint8((i*3)+9+0), dv.getUint8((i*3)+9+1), dv.getUint8((i*3)+9+2)]
-							ctx.fillStyle = "#" + rgb[0].toString(16).padStart(2, "0") + rgb[1].toString(16).padStart(2, "0") + rgb[2].toString(16).padStart(2, "0")
+							ctx.fillStyle = arrToRGBHex(rgb);
 							ctx.fillRect(i % SpanDex.tileSize, Math.floor(i / SpanDex.tileSize), 1, 1)
 						}
 					}
+					break;
+				case 0b1000011:
+					let pos = [dv.getInt32(1), dv.getInt32(5)]
+					let col = [dv.getUint8(9), dv.getUint8(10), dv.getUint8(11)]
+					//console.debug("pixel", "\npos", pos, "\ncol", col);
+					SpanDex.PutColorAtPos(pos, col, true);
 					break;
 			}
 		}
@@ -176,13 +186,13 @@ class SpanDex {
 		console.log("<span>Dex init");
 		this.tileSize = 512;
 		this.debug = true;
-		this.testInterval = setInterval(this.TestInterval, 10);
+		//this.testInterval = setInterval(this.TestInterval, 10);
 	}
 
 	static TestInterval() {
 		const multy = SpanDex.tileSize / 4;
 
-		for (let i = 0; i < 10; i++) {
+		for (let i = 0; i < 100000; i++) {
 			let x = Math.floor(((Math.random() * 2) - 1) * multy);
 			let y = Math.floor(((Math.random() * 2) - 1) * multy);
 
@@ -190,9 +200,13 @@ class SpanDex {
 		}
 	}
 
-	static PutColorAtPos(pos, col) {
+	static PutColorAtPos(pos, col, fromSrv) {
 		// find tile pos
-		console.debug(pos, col);
+		//console.debug(pos, col);
+
+		if (col instanceof Array) {
+			col = arrToRGBHex(col);
+		}
 
 		let tileCoord = [Math.floor(pos[0] / SpanDex.tileSize), Math.floor(pos[1] / SpanDex.tileSize)];
 
@@ -207,22 +221,24 @@ class SpanDex {
 			let ctx = tileCanvas.getContext("2d");
 			ctx.fillStyle = col;
 			ctx.fillRect(tilePos[0], tilePos[1], 1, 1);
-			console.debug("put pixel at", tilePos);
+			//console.debug("put pixel at", tilePos);
 		}
 
 		// tell the network
-		let msg = new Uint8Array(12);
-		let dv = new DataView(msg.buffer);
-		dv.setUint8(0, 0b000001);
-		dv.setInt32(1, pos[0]);
-		dv.setInt32(5, pos[1]);
+		if (!fromSrv) {
+			let msg = new Uint8Array(12);
+			let dv = new DataView(msg.buffer);
+			dv.setUint8(0, 0b000001);
+			dv.setInt32(1, pos[0]);
+			dv.setInt32(5, pos[1]);
 
-		let colArr = jankyColorGetter(col);
+			let colArr = jankyColorGetter(col);
 
-		dv.setUint8(9, colArr[0]);
-		dv.setUint8(10, colArr[1]);
-		dv.setUint8(11, colArr[2]);
-		WebSock.SendMessage(msg);
+			dv.setUint8(9, colArr[0]);
+			dv.setUint8(10, colArr[1]);
+			dv.setUint8(11, colArr[2]);
+			WebSock.SendMessage(msg);
+		}
 	}
 
 	static GetTile(coord) {
