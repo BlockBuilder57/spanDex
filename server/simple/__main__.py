@@ -3,6 +3,7 @@ import asyncio
 import PIL
 import os
 from websockets.asyncio.server import serve
+from websockets.exceptions import ConnectionClosed
 import messages
 
 global CLIENTS
