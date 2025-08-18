@@ -1,5 +1,13 @@
 import L, {Map, CRS, ImageOverlay, TileLayer, GridLayer, Control} from 'leaflet';
-const TILE_SIZE = 512;
+
+function jankyColorGetter(col) {
+	var ctx = document.createElement("canvas").getContext("2d");
+	ctx.fillStyle = col;
+	let hex = ctx.fillStyle; // hex code version!
+	let arr = new Uint8Array(3);
+	arr.setFromHex(hex.substring(1))
+	return arr;
+}
 
 const SpanDexControl = Control.extend({
 	initialize(elem) {
@@ -35,7 +43,7 @@ class CanvasLayer extends GridLayer {
 		if (SpanDex.debug) {
 			ctx.fillStyle = "black";
 			ctx.font = "16px monospace";
-			ctx.fillText(`${coords.x}:${coords.y}`,0,16,TILE_SIZE);
+			ctx.fillText(`${coords.x}:${coords.y}`,0,16,SpanDex.tileSize);
 		}
 
 		// draw something asynchronously and pass the tile to the done() callback
@@ -43,6 +51,8 @@ class CanvasLayer extends GridLayer {
 		/*setTimeout(function() {
 			done(error, tile);
 		}, 10);*/
+
+		SpanDex.GetTile(coords);
 
 		return tile;
 	}
@@ -60,7 +70,7 @@ class UI {
 		this.map.on("pointermove", UI.OnPointerMove);
 
 		this.canvasLayer = new CanvasLayer({
-			tileSize: TILE_SIZE,
+			tileSize: SpanDex.tileSize,
 			minNativeZoom: 0,
 			maxNativeZoom: 0,
 			className: "pointFiltered",
@@ -118,13 +128,45 @@ class WebSock {
 	}
 
 	static OnMessage(msg) {
-		console.debug(msg);
+		//console.debug(msg.data);
+		if (msg.data instanceof ArrayBuffer) {
+			msg = new Uint8Array(msg.data);
+			//console.debug(msg);
+
+			if (msg[0] & 0b1000000 == 0) {
+				console.error("somehow recieved a client message?");
+				return;
+			}
+
+			let dv = new DataView(msg.buffer);
+
+			switch(msg[0]) {
+				case 0b000001:
+					//console.debug("config");
+					SpanDex.tileSize = dv.getUint16(1);
+					UI.Initialize();
+					break;
+				case 0b000010:
+					//console.debug("tile");
+					let coord = [dv.getUint32(1), dv.getUint32(5)]
+					let canv = UI.GetCanvasTileAtCoord(coord)
+					if (canv) {
+						let ctx = canv.getContext("2d")
+						for (let i = 0; i < SpanDex.tileSize * SpanDex.tileSize; i++) {
+							let rgb = [dv.getUint8((i*3)+9+0), dv.getUint8((i*3)+9+1), dv.getUint8((i*3)+9+2)]
+							ctx.fillStyle = "#" + rgb[0].toString(16).padStart(2, "0") + rgb[1].toString(16).padStart(2, "0") + rgb[2].toString(16).padStart(2, "0")
+							ctx.fillRect(i % SpanDex.tileSize, Math.floor(i / SpanDex.tileSize), 1, 1)
+						}
+					}
+					break;
+			}
+		}
 	}
 
 	static SendMessage(msg) {
 		if (msg instanceof Array)
 			msg = new Uint8Array(msg);
-		
+
 		this.websocket.send(msg);
 	}
 };
@@ -132,12 +174,13 @@ class WebSock {
 class SpanDex {
 	static Initialize() {
 		console.log("<span>Dex init");
+		this.tileSize = 512;
 		this.debug = true;
-		//this.testInterval = setInterval(this.TestInterval, 10);
+		this.testInterval = setInterval(this.TestInterval, 10);
 	}
 
 	static TestInterval() {
-		const multy = TILE_SIZE / 2;
+		const multy = SpanDex.tileSize / 4;
 
 		for (let i = 0; i < 10; i++) {
 			let x = Math.floor(((Math.random() * 2) - 1) * multy);
@@ -149,11 +192,13 @@ class SpanDex {
 
 	static PutColorAtPos(pos, col) {
 		// find tile pos
-		let tileCoord = [Math.floor(pos[0] / TILE_SIZE), Math.floor(pos[1] / TILE_SIZE)];
+		console.debug(pos, col);
 
-		let tilePos = [Math.floor(pos[0] % TILE_SIZE), Math.floor(pos[1] % TILE_SIZE)];
-		tilePos[0] = tilePos[0] < 0 ? TILE_SIZE + tilePos[0] : tilePos[0];
-		tilePos[1] = tilePos[1] < 0 ? TILE_SIZE + tilePos[1] : tilePos[1];
+		let tileCoord = [Math.floor(pos[0] / SpanDex.tileSize), Math.floor(pos[1] / SpanDex.tileSize)];
+
+		let tilePos = [Math.floor(pos[0] % SpanDex.tileSize), Math.floor(pos[1] % SpanDex.tileSize)];
+		tilePos[0] = tilePos[0] < 0 ? SpanDex.tileSize + tilePos[0] : tilePos[0];
+		tilePos[1] = tilePos[1] < 0 ? SpanDex.tileSize + tilePos[1] : tilePos[1];
 
 		//console.debug("Getting tile", tileCoord, "pos", tilePos);
 		let tileCanvas = UI.GetCanvasTileAtCoord(tileCoord);
@@ -162,16 +207,36 @@ class SpanDex {
 			let ctx = tileCanvas.getContext("2d");
 			ctx.fillStyle = col;
 			ctx.fillRect(tilePos[0], tilePos[1], 1, 1);
-			//console.debug("put pixel at", tilePos);
+			console.debug("put pixel at", tilePos);
 		}
 
 		// tell the network
+		let msg = new Uint8Array(12);
+		let dv = new DataView(msg.buffer);
+		dv.setUint8(0, 0b000001);
+		dv.setInt32(1, pos[0]);
+		dv.setInt32(5, pos[1]);
+
+		let colArr = jankyColorGetter(col);
+
+		dv.setUint8(9, colArr[0]);
+		dv.setUint8(10, colArr[1]);
+		dv.setUint8(11, colArr[2]);
+		WebSock.SendMessage(msg);
+	}
+
+	static GetTile(coord) {
+		let msg = new Uint8Array(9);
+		let dv = new DataView(msg.buffer);
+		dv.setUint8(0, 0b000010);
+		dv.setInt32(1, coord.x);
+		dv.setInt32(5, coord.y);
+		WebSock.SendMessage(msg);
 	}
 };
 
 document.addEventListener("DOMContentLoaded", () => {
 	SpanDex.Initialize();
-	UI.Initialize();
 	WebSock.Connect();
 
 	// nasty... can I avoid this?
