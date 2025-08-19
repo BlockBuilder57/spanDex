@@ -150,24 +150,45 @@ class WebSock {
 					//console.debug("config", "\ntileSize", SpanDex.tileSize);
 					UI.Initialize();
 					break;
-				case 0b1000010:
-					let coord = [dv.getInt32(1), dv.getInt32(5)]
+				case 0b1010001:
+					var coord = [dv.getInt32(1), dv.getInt32(5)]
 					//console.debug("tile", coord);
-					let canv = UI.GetCanvasTileAtCoord(coord)
+					var canv = UI.GetCanvasTileAtCoord(coord)
 					if (canv) {
-						let ctx = canv.getContext("2d")
-						for (let i = 0; i < SpanDex.tileSize * SpanDex.tileSize; i++) {
-							let rgb = [dv.getUint8((i*3)+9+0), dv.getUint8((i*3)+9+1), dv.getUint8((i*3)+9+2)]
+						var ctx = canv.getContext("2d")
+						for (var i = 0; i < SpanDex.tileSize * SpanDex.tileSize; i++) {
+							var rgb = [dv.getUint8((i*3)+9+0), dv.getUint8((i*3)+9+1), dv.getUint8((i*3)+9+2)]
 							ctx.fillStyle = arrToRGBHex(rgb);
 							ctx.fillRect(i % SpanDex.tileSize, Math.floor(i / SpanDex.tileSize), 1, 1)
 						}
 					}
 					break;
-				case 0b1000011:
-					let pos = [dv.getInt32(1), dv.getInt32(5)]
-					let col = [dv.getUint8(9), dv.getUint8(10), dv.getUint8(11)]
+				case 0b1001001:
+					var pos = [dv.getInt32(1), dv.getInt32(5)]
+					var col = [dv.getUint8(9), dv.getUint8(10), dv.getUint8(11)]
 					//console.debug("pixel", "\npos", pos, "\ncol", col);
 					SpanDex.PutColorAtPos(pos, col, true);
+					break;
+				case 0b1001010:
+					var pos = [dv.getInt32(1), dv.getInt32(5)]
+					var wh = [dv.getUint16(9), dv.getUint16(11)]
+					console.debug("pixel batch", "\npos", pos, "\nwidth+height", wh);
+					var offset = 13
+
+					var cur = [0, 0]
+
+					for (var i = 0; i < wh[0] * wh[1]; i++, offset += 3) {
+						var col = [dv.getUint8(offset + 0), dv.getUint8(offset + 1), dv.getUint8(offset + 2)]
+						
+						cur[0]++;
+						if (cur[0] >= wh[0]) {
+							cur[1]++;
+							cur[0] = 0;
+						}
+					
+						SpanDex.PutColorAtPos([pos[0] + cur[0], pos[1] + cur[1]], col, true);
+					}
+					
 					break;
 			}
 		}
@@ -180,6 +201,19 @@ class WebSock {
 		this.websocket.send(msg);
 	}
 };
+
+class Paint {
+	// http://www.softwareandfinance.com/Turbo_C/DrawCircle.html
+	static DrawCircle(x, y, radius, col) {
+		for (let i = 0; i < 360; i += 0.1)
+		{
+			let x1 = radius * Math.cos(i * Math.PI / 180.0);
+			let y1 = radius * Math.sin(i * Math.PI / 180.0);
+
+			SpanDex.PutColorAtPos([x + x1, y + y1], col);
+		}
+	}
+}
 
 class SpanDex {
 	static Initialize() {
@@ -228,7 +262,7 @@ class SpanDex {
 		if (!fromSrv) {
 			let msg = new Uint8Array(12);
 			let dv = new DataView(msg.buffer);
-			dv.setUint8(0, 0b000001);
+			dv.setUint8(0, 0b0001001);
 			dv.setInt32(1, pos[0]);
 			dv.setInt32(5, pos[1]);
 
@@ -244,7 +278,7 @@ class SpanDex {
 	static GetTile(coord) {
 		let msg = new Uint8Array(9);
 		let dv = new DataView(msg.buffer);
-		dv.setUint8(0, 0b000010);
+		dv.setUint8(0, 0b0010001);
 		dv.setInt32(1, coord.x);
 		dv.setInt32(5, coord.y);
 		WebSock.SendMessage(msg);
@@ -257,6 +291,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 	// nasty... can I avoid this?
 	window.UI = UI;
+	window.Paint = Paint;
 	window.SpanDex = SpanDex;
 	window.WebSock = WebSock;
 });

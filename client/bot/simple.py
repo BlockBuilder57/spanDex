@@ -1,13 +1,15 @@
 import argparse
 import asyncio
 import os
-from PIL import Image
-from websockets.sync.client import connect
+import random
+import sys
+from PIL import Image, ImageOps
+import websockets
 
-TILE_SIZE = 20
+TILE_SIZE = -1
 
 def makePixelMessage(x, y, r, g, b):
-	type = 0b0000001
+	type = 0b0001001
 	tileData = type.to_bytes(1)
 
 	tileData += int(x).to_bytes(4, signed=True)
@@ -16,28 +18,29 @@ def makePixelMessage(x, y, r, g, b):
 	tileData += int(r).to_bytes(1)
 	tileData += int(g).to_bytes(1)
 	tileData += int(b).to_bytes(1)
-
-	#print("made a pixel message")
 	
 	return tileData
 
-def hello():
-	with connect("ws://localhost:5702") as websocket:
-		config = websocket.recv()
+async def main():
+	async with websockets.connect("ws://localhost:5702") as websocket:
+		config = await websocket.recv()
 		TILE_SIZE = int.from_bytes(config[1:3])
 
-		img = Image.open("images/container2.png")
-		img.resize((TILE_SIZE // 2, TILE_SIZE // 2))
+		img = Image.open(sys.argv[1])
+		img = img.convert("RGBA")
+		#img = img.resize((TILE_SIZE, TILE_SIZE))
+		#img = ImageOps.fit(img, (TILE_SIZE, TILE_SIZE))
 
 		width, height = img.size
 
 		# taking half of the width:
-		for i in range(width):
-			for j in range(height):
+		for j in range(height):
+			for i in range(width):
 			
 				# getting the RGB pixel value.
-				r, g, b, p = img.getpixel((i, j))
+				r, g, b, a = img.getpixel((i, j))
 
-				websocket.send(makePixelMessage(i, j, r, g, b))
+				if a >= 200:
+					await websocket.send(makePixelMessage(i-(width/2), j-(height/2), r, g, b))
 
-hello()
+asyncio.run(main())
