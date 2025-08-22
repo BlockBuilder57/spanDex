@@ -120,10 +120,6 @@ class UI {
 		if (!UI.canvasLayerDebug)
 			return;
 
-		// get time
-		// reduce if less than 10 sec
-		// set to zero if less then nuke (-1)
-
 		for (const key in UI.canvasLayerDebug._tiles) {
 			const tile = UI.canvasLayerDebug._tiles[key].el;
 			// skip if we don't have a valid tile
@@ -150,13 +146,13 @@ class UI {
 
 	static OnMapMove(e) {
 		/*let pos = UI.map.getCenter();
-		let posPixel = [Math.floor(pos.lng), Math.floor(pos.lat)];
+		let posPixel = [Math.floor(pos.lng), -Math.floor(pos.lat)];
 		document.getElementById("txtPosition").innerText = `${posPixel}`;*/
 	}
 
 	static OnPointerMove(e) {
 		let pos = e.latlng;
-		let posPixel = [Math.floor(pos.lng), Math.floor(pos.lat)];
+		let posPixel = [Math.floor(pos.lng), -Math.floor(pos.lat)];
 		document.getElementById("txtPosition").innerText = `${posPixel}`;
 	}
 
@@ -224,26 +220,19 @@ class WebSock {
 					SpanDex.PutColorAtPos(pos, col, true);
 					break;
 				case 0b1001010:
-					var pos = [dv.getInt32(1), dv.getInt32(5)]
-					var wh = [dv.getUint16(9), dv.getUint16(11)]
-					console.debug("pixel batch", "\npos", pos, "\nwidth+height", wh);
-					var offset = 13
-
-					var cur = [0, 0]
-
-					for (var i = 0; i < wh[0] * wh[1]; i++, offset += 3) {
-						var col = [dv.getUint8(offset + 0), dv.getUint8(offset + 1), dv.getUint8(offset + 2)]
-						
-						cur[0]++;
-						if (cur[0] >= wh[0]) {
-							cur[1]++;
-							cur[0] = 0;
-						}
+					var len = dv.getUint16(1)
+					//console.debug("pixel batch", "\nlength", len);
 					
-						SpanDex.PutColorAtPos([pos[0] + cur[0], pos[1] + cur[1]], col, true);
+					var offset = 3
+					for (var i = 0; i < len; i++, offset += 12) {
+						var pos = [dv.getInt32(offset+0), dv.getInt32(offset+4)]
+						var col = [dv.getUint8(offset+8), dv.getUint8(offset+9), dv.getUint8(offset+10), dv.getUint8(offset+11)]
+					
+						SpanDex.PutColorAtPos(pos, col, true);
 					}
-					
 					break;
+				default:
+					console.warn("Recieved a strange message:", msg[0].toString(2))
 			}
 		}
 	}

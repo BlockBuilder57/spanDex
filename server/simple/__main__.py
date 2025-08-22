@@ -29,7 +29,12 @@ def pixHandler(x, y, r, g, b, a):
 	msg = messages.makeServerMessage(0b1001001, x, y, r, g, b, a)
 	asyncio.create_task(broadcast(msg))
 
+def pixBatchHandler(batch):
+	msg = messages.makeServerMessage(0b1001010, batch)
+	asyncio.create_task(broadcast(msg))
+
 messages.PIXEL_HANDLER = pixHandler
+messages.PIXEL_BATCH_HANDLER = pixBatchHandler
 
 async def handle(websocket):
 	CLIENTS.add(websocket)
@@ -49,6 +54,8 @@ async def handle(websocket):
 		CLIENTS.remove(websocket)
 
 async def main():
+	tiles.LoadTilesFromFolder()
+
 	async with serve(handle, "localhost", 5702) as server:
 		await server.serve_forever()
 

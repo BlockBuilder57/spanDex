@@ -1,12 +1,23 @@
-import sys
 import atexit
+import os
 import signal
+import sys
 
 from PIL import Image, ImageOps
 
 TILE_SIZE = 512
 LOADED_TILES = {}
 MODIFIED_TILES = {}
+
+def LoadTilesFromFolder():
+	allPossible = [f for f in os.listdir("tiles/") if os.path.isfile(os.path.join("tiles/", f))]
+	for f in allPossible:
+		fSplit = f[:-4]
+		x, y = fSplit.split("_")
+		x = int(x)
+		y = int(y)
+		
+		LOADED_TILES[(x, y)] = Image.open(os.path.join("tiles/", f))
 
 def CreateTile(coord):
 	if coord in LOADED_TILES:

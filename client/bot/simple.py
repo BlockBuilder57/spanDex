@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import copy
 import math
 import os
 import random
@@ -11,8 +12,6 @@ import websockets
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 from websockets.connection import State
 
-TILE_SIZE = -1
-
 async def send(websocket, message):
 	if websocket.state != State.OPEN:
 		return
@@ -21,6 +20,15 @@ async def send(websocket, message):
 		await websocket.send(message)
 	except ConnectionClosed:
 		pass
+
+async def sendTupleBatch(batch):
+	async with websockets.connect("ws://localhost:5702") as websocket:
+		print("new websocket")
+		config = await websocket.recv()
+
+		await send(websocket, makePixelBatchMessage(batch))
+		#await asyncio.sleep(1)
+		print("socket done sending chunk, maybe wait")
 
 def makePixelMessage(x, y, r, g, b, a):
 	type = 0b0001001
@@ -36,6 +44,35 @@ def makePixelMessage(x, y, r, g, b, a):
 	
 	return tileData
 
+def makePixelBatchMessage(batch):
+	type = 0b0001010
+	tileData = type.to_bytes(1)
+
+	if len(batch) > 0x4000:
+		print("oops, too many for a batch!")
+		return None
+
+	tileData += len(batch).to_bytes(2)
+
+	for b in batch:
+		x, y, r, g, b, a = b
+
+		tileData += int(x).to_bytes(4, signed=True)
+		tileData += int(y).to_bytes(4, signed=True)
+
+		tileData += int(r).to_bytes(1)
+		tileData += int(g).to_bytes(1)
+		tileData += int(b).to_bytes(1)
+		tileData += int(a).to_bytes(1)
+	
+	return tileData
+
+def getPixelReturnSixTuple(img, x, y, px, py):
+	# getting the RGB pixel value.
+	r, g, b, a = img.getpixel((x, y))
+
+	return (x + px, y + py, r, g, b, a)
+
 # https://github.com/qqwweee/keras-yolo3/issues/330
 def letterbox_image(image, size):
 	iw, ih = image.size
@@ -49,27 +86,21 @@ def letterbox_image(image, size):
 	new_image.paste(image, ((w-nw)//2, (h-nh)//2))
 	return new_image
 
-async def grabPixelAndSend(websocket, img, i, j, x, y):
-	# getting the RGB pixel value.
-	r, g, b, a = img.getpixel((i, j))
-
-	if a > 0:
-		await send(websocket, makePixelMessage(x, y, r, g, b, a))
-	await asyncio.sleep(0)
-
-async def METHOD_linear(websocket, img):
+def METHOD_linear(img, posX, posY):
 	width, height = img.size
 	
-	print("sending pixels")
-	for j in range(height): 
-		for i in range(width):
-			await grabPixelAndSend(websocket, img, i, j, i-(width/2), j-(height/2))
+	print("gathering pixels")
+	for y in range(height): 
+		for x in range(width):
+			tup = getPixelReturnSixTuple(img, x, y, posX, posY)
+			if tup[5] > 0: # alpha
+				SIX_TUPLE_BUFFER.append(tup)
 
-async def METHOD_hilbert(websocket, img):
-	# log2 smallest dimension
-	largestDim = max(img.size)
-	log2 = int(math.log2(largestDim))
-	p2 = int(math.pow(2, log2))
+def METHOD_hilbert(img, posX, posY):
+	# log2 largest dimension
+	imgDim = max(img.size)
+	log2 = int(math.log2(imgDim))
+	p2 = math.ceil(math.pow(2, log2))
 	# force a letterbox for this, we need a power of 2 size
 	img = letterbox_image(img, (p2, p2))
 	
@@ -81,44 +112,100 @@ async def METHOD_hilbert(websocket, img):
 	dist = list(range(p2*p2))
 	points = hilbert_curve.points_from_distances(dist)
 
-	print("sending pixels")
+	print("gathering pixels")
 	for i in range(p2*p2):
 		x, y = points[i]
-		await grabPixelAndSend(websocket, img, x, y, x-(p2/2), y-(p2/2))
+		tup = getPixelReturnSixTuple(img, x, y, posX, posY)
+		if tup[5] > 0: # alpha
+			SIX_TUPLE_BUFFER.append(tup)
 
+def METHOD_random(img, posX, posY):
+	width, height = img.size
+
+	points = []
+	
+	print("gathering points")
+	for y in range(height): 
+		for x in range(width):
+			points.append((x, y))
+	
+	print("shuffling")
+	random.shuffle(points)
+
+	print("gathering pixels")
+	for p in points:
+		tup = getPixelReturnSixTuple(img, *p, posX, posY)
+		if tup[5] > 0: # alpha
+			SIX_TUPLE_BUFFER.append(tup)
 
 async def main():
 	parser = argparse.ArgumentParser(description="Simple bot")
 	parser.add_argument("file", help="Image file to print.", type=str)
-	parser.add_argument("-s", "--scale", help="scale", type=float)
-	parser.add_argument("-f", "--fit", help="scale", type=int, nargs=2)
+	parser.add_argument("-m", "--method", help="Index method", type=str)
+	parser.add_argument("-s", "--scale", help="Overall scale (applied first)", type=float)
+	parser.add_argument("-f", "--fit", help="Fit to a box (2 args)", type=int, nargs=2)
+	parser.add_argument("-r", "--resize", help="Resize", type=int, nargs=2)
+	parser.add_argument("-b", "--batch", help="Batch size override", type=int)
+	parser.add_argument("-p", "--position", help="Canvas position", type=int, nargs=2)
 	args = parser.parse_args()
 
 	print(args)
 
-	async with websockets.connect("ws://localhost:5702") as websocket:
-		config = await websocket.recv()
-		TILE_SIZE = int.from_bytes(config[1:3])
-		print("got config, tile size is", TILE_SIZE)
+	img = Image.open(args.file)
+	img = img.convert("RGBA")
+	
+	width, height = img.size
 
-		img = Image.open(args.file)
-		img = img.convert("RGBA")
-		
+	if args.scale is not None:
+		img = img.resize((int(width), int(height)))
+
+	if args.fit is not None:
+		# does cropping, not scaling!
+		#img = ImageOps.fit(img, (args.fit[0], args.fit[1]))
+		img = letterbox_image(img, (args.fit[0], args.fit[1]))
+		width, height = img.size
+	
+	if args.resize is not None:
+		img = img.resize((args.resize[0], args.resize[1]))
 		width, height = img.size
 
-		if args.scale is not None:
-			width *= args.scale
-			height *= args.scale
-			img = img.resize((int(width), int(height)))
+	global SIX_TUPLE_BUFFER
+	SIX_TUPLE_BUFFER = []
 
-		if args.fit is not None:
-			# does cropping, not scaling!
-			#img = ImageOps.fit(img, (args.fit[0], args.fit[1]))
-			img = letterbox_image(img, (args.fit[0], args.fit[1]))
-			width, height = img.size
-		
-		#await METHOD_linear(websocket, img)
-		await METHOD_hilbert(websocket, img)
-		print("all done, waiting for socket close")
+	BATCH_SIZE = min(0x4000, width*height)
+	if args.batch is not None:
+		BATCH_SIZE = args.batch
+
+	x = y = 0
+	if args.position is not None:
+		x, y = (args.position[0], args.position[1])
+
+	match args.method:
+		case "hilbert":
+			METHOD_hilbert(img, x, y)
+		case "random":
+			METHOD_random(img, x, y)
+		case _:
+			METHOD_linear(img, x, y)
+
+	print(len(SIX_TUPLE_BUFFER), "pixels to send")
+	print(BATCH_SIZE, "per batch,", len(SIX_TUPLE_BUFFER) // BATCH_SIZE, "batches")
+
+	tasks = []
+
+	i = 0
+	while len(SIX_TUPLE_BUFFER) > 0:
+		# take the first BATCH_SIZE pixels
+		batch = copy.deepcopy(SIX_TUPLE_BUFFER[:BATCH_SIZE])
+		SIX_TUPLE_BUFFER = SIX_TUPLE_BUFFER[BATCH_SIZE:]
+
+		tasks.append(asyncio.create_task(sendTupleBatch(batch)))
+		await asyncio.sleep(0.001)
+		print(f"created task {i}...")
+		i += 1
+
+	await asyncio.wait(tasks)
+
+	print("sent all batches")
 
 asyncio.run(main())
