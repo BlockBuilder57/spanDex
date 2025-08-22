@@ -23,13 +23,13 @@ def makeServerMessageTile(x, y):
 	#tileData += bytes(pixels)
 
 	tile = tiles.GetOrCreateTile((x, y))
-	tileData += tile.convert("RGB").tobytes()
+	tileData += tile.convert("RGBA").tobytes()
 
 	#print("made the data yay")
 	
 	return tileData
 
-def makeServerMessagePixel(x, y, r, g, b):
+def makeServerMessagePixel(x, y, r, g, b, a):
 	type = 0b1001001
 	tileData = type.to_bytes(1)
 
@@ -39,6 +39,7 @@ def makeServerMessagePixel(x, y, r, g, b):
 	tileData += int(r).to_bytes(1)
 	tileData += int(g).to_bytes(1)
 	tileData += int(b).to_bytes(1)
+	tileData += int(a).to_bytes(1)
 
 	#print("made a pixel message")
 	
@@ -52,8 +53,8 @@ def makeServerMessage(type, *data):
 			return makeServerMessageTile(*data)
 		case 0b1001001: # send pixel
 			return makeServerMessagePixel(*data)
-		#default:
-		#    print("dunno what kind of message that is")
+		case _:
+			print("cannot make a message of type", type)
 
 def handleClientMessagePutPixel(data):
 	posX = int.from_bytes(data[1:5], signed=True)
@@ -62,21 +63,20 @@ def handleClientMessagePutPixel(data):
 	colR = int.from_bytes(data[9:10])
 	colG = int.from_bytes(data[10:11])
 	colB = int.from_bytes(data[11:12])
+	colA = int.from_bytes(data[12:13])
 
-	#print(posX, posY, colR, colG, colB)
+	#print(posX, posY, colR, colG, colB, colA)
+	if colA == 0:
+		return
 
-	#idx = (posXclamp + (posYclamp * tiles.TILE_SIZE)) * 3
+	existing = tiles.GetPixel(posX, posY)
 
-	#if pixels[idx+0:idx+3] != [colR, colG, colB]:
-	#	pixels[idx+0] = colR
-	#	pixels[idx+1] = colG
-	#	pixels[idx+2] = colB
+	if (colR, colG, colB) != (existing[0], existing[1], existing[2]):
+		tiles.SetPixel(posX, posY, colR, colG, colB, colA)
 
-	tiles.SetPixel(posX, posY, colR, colG, colB)
-
-	# let the network know
-	if PIXEL_HANDLER is not None:
-		PIXEL_HANDLER(posX, posY, colR, colG, colB)
+		# let the network know
+		if PIXEL_HANDLER is not None:
+			PIXEL_HANDLER(posX, posY, colR, colG, colB, colA)
 
 def handleClientMessageGetTile(data):
 	posX = int.from_bytes(data[1:5], signed=True)
@@ -92,5 +92,7 @@ def handleClientMessage(data):
 			return handleClientMessagePutPixel(data)
 		case 0b0010001: # get tile
 			return handleClientMessageGetTile(data)
+		case _:
+			print("cannot recieve a message of type", type)
 
 	return None

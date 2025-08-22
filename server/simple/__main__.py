@@ -2,6 +2,7 @@ import argparse
 import asyncio
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
+from websockets.connection import State
 
 import messages
 import tiles
@@ -10,11 +11,12 @@ global CLIENTS
 CLIENTS = set()
 
 async def send(websocket, message):
+	if websocket.state != State.OPEN:
+		return
+
 	try:
 		await websocket.send(message)
 	except ConnectionClosed:
-		pass
-	except ConnectionClosedError:
 		pass
 
 async def broadcast(message):
@@ -23,8 +25,8 @@ async def broadcast(message):
 		#print("broadcasting to socket")
 		asyncio.create_task(send(websocket, message))
 
-def pixHandler(x, y, r, g, b):
-	msg = messages.makeServerMessage(0b1001001, x, y, r, g, b)
+def pixHandler(x, y, r, g, b, a):
+	msg = messages.makeServerMessage(0b1001001, x, y, r, g, b, a)
 	asyncio.create_task(broadcast(msg))
 
 messages.PIXEL_HANDLER = pixHandler
@@ -39,6 +41,10 @@ async def handle(websocket):
 			if resp is not None:
 				#print(resp)
 				await websocket.send(resp)
+				await asyncio.sleep(0)
+	except ConnectionClosedError as e:
+		print("forcibly closed websocket due to", type(e), e)
+		pass
 	finally:
 		CLIENTS.remove(websocket)
 

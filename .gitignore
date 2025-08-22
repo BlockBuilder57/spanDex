@@ -2,5 +2,5 @@ client/www/thirdparty/
 client/bot/images/
 server/*/tiles/
 
-**/__pycache__/*
+__pycache__/
 **/*.pyc

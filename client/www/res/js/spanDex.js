@@ -10,7 +10,10 @@ function jankyColorGetter(col) {
 }
 
 function arrToRGBHex(arr) {
-	return "#" + arr[0].toString(16).padStart(2, "0") + arr[1].toString(16).padStart(2, "0") + arr[2].toString(16).padStart(2, "0")
+	// https://stackoverflow.com/a/34310051
+	return "#" + Array.from(arr, function (byte) {
+		return ('0' + (byte & 0xFF).toString(16)).slice(-2);
+	}).join('');
 }
 
 const SpanDexControl = Control.extend({
@@ -40,14 +43,17 @@ class CanvasLayer extends GridLayer {
 		tile.width = size.x;
 		tile.height = size.y;
 
-		let ctx = tile.getContext("2d");
-		ctx.fillStyle = "white";
-		ctx.fillRect(0, 0, tile.width, tile.height);
+		// clear layer if desired
+		if (this.options.clearLayer) {
+			let ctx = tile.getContext("2d");
+			ctx.fillStyle = "white";
+			//ctx.fillRect(0, 0, tile.width, tile.height);
 
-		if (SpanDex.debug) {
-			ctx.fillStyle = "black";
-			ctx.font = "16px monospace";
-			ctx.fillText(`${coords.x}:${coords.y}`,0,16,SpanDex.tileSize);
+			if (SpanDex.debug) {
+				ctx.fillStyle = "black";
+				ctx.font = "16px monospace";
+				ctx.fillText(`${coords.x}:${coords.y}`,0,16,SpanDex.tileSize);
+			}
 		}
 
 		// draw something asynchronously and pass the tile to the done() callback
@@ -78,8 +84,20 @@ class UI {
 			minNativeZoom: 0,
 			maxNativeZoom: 0,
 			className: "pointFiltered",
-			attribution: `<span id="txtPosition">-, -</span>`
+			attribution: `<span id="txtPosition">-, -</span>`,
+			clearLayer: true
 		}).addTo(this.map);
+
+		if (SpanDex.debug) {
+			this.canvasLayerDebug = new CanvasLayer({
+				tileSize: SpanDex.tileSize,
+				minNativeZoom: 0,
+				maxNativeZoom: 0,
+				className: "pointFiltered"
+			}).addTo(this.map);
+
+			this.canvasLayerDebugInterval = setInterval(UI.DebugLayerOpacityTickdown, 20);
+		}
 	}
 
 	static Initialize() {
@@ -98,6 +116,38 @@ class UI {
 		this.btnRecenter.onclick = () => { UI.map.setView([0, 0], 0); }
 	}
 
+	static DebugLayerOpacityTickdown() {
+		if (!UI.canvasLayerDebug)
+			return;
+
+		// get time
+		// reduce if less than 10 sec
+		// set to zero if less then nuke (-1)
+
+		for (const key in UI.canvasLayerDebug._tiles) {
+			const tile = UI.canvasLayerDebug._tiles[key].el;
+			// skip if we don't have a valid tile
+			if (!tile || !tile.lastDraw || tile.lastDraw == -1)
+				continue;
+
+			// we'll want to clear anything outside of 5 sec, then invalidate it for later checks
+			let clear = false;
+			if (Math.abs(tile.lastDraw - Date.now()) > 5000) {
+				//console.debug(`clearing ${key} after ${Math.abs(tile.lastDraw - Date.now())}ms`);
+				tile.lastDraw = -1;
+				clear = true;
+			}
+
+			const ctx = tile.getContext("2d");
+			let imageData = ctx.getImageData(0, 0, SpanDex.tileSize, SpanDex.tileSize);
+			for (var i = 0; i < imageData.data.length; i += 4) {
+				//imageData.data[i+3] *= clear ? 0 : 0.96;
+				imageData.data[i+3] -= clear ? 255 : 3;
+			}
+			ctx.putImageData(imageData, 0, 0);
+		}
+	}
+
 	static OnMapMove(e) {
 		/*let pos = UI.map.getCenter();
 		let posPixel = [Math.floor(pos.lng), Math.floor(pos.lat)];
@@ -110,11 +160,14 @@ class UI {
 		document.getElementById("txtPosition").innerText = `${posPixel}`;
 	}
 
-	static GetCanvasTileAtCoord(coord) {
+	static GetCanvasTileAtCoord(coord, canvasLayer) {
+		if (!canvasLayer)
+			canvasLayer = UI.canvasLayer;
+
 		// this is what Leaflet does lol
 		let key = `${coord[0]}:${coord[1]}:0`;
-		if (key in UI.canvasLayer._tiles)
-			return UI.canvasLayer._tiles[key].el;
+		if (key in canvasLayer._tiles)
+			return canvasLayer._tiles[key].el;
 	}
 };
 
@@ -155,17 +208,18 @@ class WebSock {
 					//console.debug("tile", coord);
 					var canv = UI.GetCanvasTileAtCoord(coord)
 					if (canv) {
-						var ctx = canv.getContext("2d")
-						for (var i = 0; i < SpanDex.tileSize * SpanDex.tileSize; i++) {
-							var rgb = [dv.getUint8((i*3)+9+0), dv.getUint8((i*3)+9+1), dv.getUint8((i*3)+9+2)]
-							ctx.fillStyle = arrToRGBHex(rgb);
-							ctx.fillRect(i % SpanDex.tileSize, Math.floor(i / SpanDex.tileSize), 1, 1)
+						var ctx = canv.getContext("2d");
+						var imageData = ctx.getImageData(0, 0, SpanDex.tileSize, SpanDex.tileSize);
+						var startOffset = 9;
+						for (var i = startOffset; i < startOffset + imageData.data.length; i++) {
+							imageData.data[i-startOffset] = dv.getUint8(i);
 						}
+						ctx.putImageData(imageData, 0, 0);
 					}
 					break;
 				case 0b1001001:
 					var pos = [dv.getInt32(1), dv.getInt32(5)]
-					var col = [dv.getUint8(9), dv.getUint8(10), dv.getUint8(11)]
+					var col = [dv.getUint8(9), dv.getUint8(10), dv.getUint8(11), dv.getUint8(12)]
 					//console.debug("pixel", "\npos", pos, "\ncol", col);
 					SpanDex.PutColorAtPos(pos, col, true);
 					break;
@@ -219,6 +273,7 @@ class SpanDex {
 	static Initialize() {
 		console.log("<span>Dex init");
 		this.tileSize = 512;
+		this.localDrawing = false;
 		this.debug = true;
 		//this.testInterval = setInterval(this.TestInterval, 10);
 	}
@@ -242,24 +297,45 @@ class SpanDex {
 			col = arrToRGBHex(col);
 		}
 
-		let tileCoord = [Math.floor(pos[0] / SpanDex.tileSize), Math.floor(pos[1] / SpanDex.tileSize)];
+		if (fromSrv || SpanDex.localDrawing) {
+			let tileCoord = [Math.floor(pos[0] / SpanDex.tileSize), Math.floor(pos[1] / SpanDex.tileSize)];
 
-		let tilePos = [Math.floor(pos[0] % SpanDex.tileSize), Math.floor(pos[1] % SpanDex.tileSize)];
-		tilePos[0] = tilePos[0] < 0 ? SpanDex.tileSize + tilePos[0] : tilePos[0];
-		tilePos[1] = tilePos[1] < 0 ? SpanDex.tileSize + tilePos[1] : tilePos[1];
+			let tilePos = [Math.floor(pos[0] % SpanDex.tileSize), Math.floor(pos[1] % SpanDex.tileSize)];
+			tilePos[0] = tilePos[0] < 0 ? SpanDex.tileSize + tilePos[0] : tilePos[0];
+			tilePos[1] = tilePos[1] < 0 ? SpanDex.tileSize + tilePos[1] : tilePos[1];
 
-		//console.debug("Getting tile", tileCoord, "pos", tilePos);
-		let tileCanvas = UI.GetCanvasTileAtCoord(tileCoord);
-		// we don't know if the tile is on screen, so just draw there anyway
-		if (tileCanvas) {
-			let ctx = tileCanvas.getContext("2d");
-			ctx.fillStyle = col;
-			ctx.fillRect(tilePos[0], tilePos[1], 1, 1);
-			//console.debug("put pixel at", tilePos);
+			//console.debug("Getting tile", tileCoord, "pos", tilePos);
+			let tileCanvas = UI.GetCanvasTileAtCoord(tileCoord);
+			// we don't know if the tile is on screen, so just draw there anyway
+			if (tileCanvas) {
+				tileCanvas.lastDraw = Date.now();
+				let ctx = tileCanvas.getContext("2d");
+				
+				// direct method, v slow
+				/*var imageData = ctx.getImageData(tilePos[0], tilePos[1], 1, 1);
+				for (var i = 0; i < 4; i++)
+					imageData.data[i] = col[i];
+				ctx.putImageData(imageData, tilePos[0], tilePos[1]);*/
+
+				ctx.fillStyle = col;
+				ctx.clearRect(tilePos[0], tilePos[1], 1, 1);
+				ctx.fillRect(tilePos[0], tilePos[1], 1, 1);
+				//console.debug("put pixel at", tilePos);
+			}
+
+			if (SpanDex.debug) {
+				let tileCanvas = UI.GetCanvasTileAtCoord(tileCoord, UI.canvasLayerDebug);
+				if (tileCanvas) {
+					tileCanvas.lastDraw = Date.now();
+					let ctx = tileCanvas.getContext("2d");
+					ctx.fillStyle = fromSrv ? "#ff00ff" : "#ffff00";
+					ctx.fillRect(tilePos[0], tilePos[1], 1, 1);
+				}
+			}
 		}
 
 		// tell the network
-		if (!fromSrv) {
+		if (!fromSrv && !SpanDex.localDrawing) {
 			let msg = new Uint8Array(12);
 			let dv = new DataView(msg.buffer);
 			dv.setUint8(0, 0b0001001);

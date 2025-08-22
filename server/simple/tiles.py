@@ -6,12 +6,13 @@ from PIL import Image, ImageOps
 
 TILE_SIZE = 512
 LOADED_TILES = {}
+MODIFIED_TILES = {}
 
 def CreateTile(coord):
 	if coord in LOADED_TILES:
 		return LOADED_TILES[coord]
 
-	LOADED_TILES[coord] = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (255, 255, 255, 255))
+	LOADED_TILES[coord] = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0))
 	return LOADED_TILES[coord]
 
 def GetOrCreateTile(coord):
@@ -19,7 +20,7 @@ def GetOrCreateTile(coord):
 		CreateTile(coord)
 	return LOADED_TILES[coord]
 
-def SetPixel(x, y, r, g, b):
+def SetPixel(x, y, r, g, b, a):
 	tileCoordX = x // TILE_SIZE
 	tileCoordY = y // TILE_SIZE
 	tilePosX = x % TILE_SIZE
@@ -29,13 +30,27 @@ def SetPixel(x, y, r, g, b):
 
 	tile = GetOrCreateTile((tileCoordX, tileCoordY))
 	if tile is not None:
-		tile.putpixel((tilePosX, tilePosY), (r, g, b))
+		tile.putpixel((tilePosX, tilePosY), (r, g, b, a))
+		MODIFIED_TILES[(tileCoordX, tileCoordY)] = tile
+
+def GetPixel(x, y):
+	tileCoordX = x // TILE_SIZE
+	tileCoordY = y // TILE_SIZE
+	tilePosX = x % TILE_SIZE
+	tilePosX = TILE_SIZE + tilePosX if tilePosX < 0 else tilePosX
+	tilePosY = y % TILE_SIZE
+	tilePosY = TILE_SIZE + tilePosY if tilePosY < 0 else tilePosY
+
+	tile = GetOrCreateTile((tileCoordX, tileCoordY))
+	if tile is not None:
+		return tile.getpixel((tilePosX, tilePosY))
 
 # save when exit
 
 def exit_handler():
-	for i, k in LOADED_TILES:
-		print("loaded", i, k)
+	for x, y in MODIFIED_TILES:
+		print("saving modified tile", x, y)
+		MODIFIED_TILES[(x, y)].save(f"tiles/{x}_{y}.png")
 
 def kill_handler(*args):
 	sys.exit(0)

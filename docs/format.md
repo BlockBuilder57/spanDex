@@ -1,7 +1,7 @@
 | name | type | desc |
 |------|------|------|
 | Message Type | u8 | Determines the type of the message |
-| Color | u8 x3 | Color as RGB bytes |
+| Color | u8 x4 | Color as RGBA bytes |
 | Position | u32 x2 | Pixel position |
 
 
