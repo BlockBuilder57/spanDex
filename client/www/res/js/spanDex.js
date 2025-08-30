@@ -133,18 +133,23 @@ class UI {
 
 			// we'll want to clear anything outside of 5 sec, then invalidate it for later checks
 			let clear = false;
-			let diff = Math.abs(tile.lastDraw - Date.now());
+			let diff = Math.abs(tile.lastDraw - Date.now()) / 1000;
 
-			if (diff > 5000) {
+			if (diff > 5.0) {
 				//console.debug(`clearing ${key} after ${Math.abs(tile.lastDraw - Date.now())}ms`);
 				tile.lastDraw = -1;
 				clear = true;
 			}
 
+			let opacityCap = Math.floor((1.0 - (diff / 5.0)) * 255);
+
 			const ctx = tile.getContext("2d");
 			let imageData = ctx.getImageData(0, 0, SpanDex.tileSize, SpanDex.tileSize);
 			for (var i = 0; i < imageData.data.length; i += 4) {
-				imageData.data[i+3] = clear ? 0 : (1 - (diff / 5000));
+				if (imageData.data[i + 3] <= 0)
+					continue;
+
+				imageData.data[i + 3] = (clear ? 0 : Math.min(opacityCap, imageData.data[i + 3] - 3));
 			}
 			ctx.putImageData(imageData, 0, 0);
 		}
@@ -212,21 +217,17 @@ class WebSock {
 					UI.Initialize();
 					break;
 				case SpanDex.MsgTypesServer.PIX_Send:
-					var pos = [dv.getInt32(1), dv.getInt32(5)]
-					var col = [dv.getUint8(9), dv.getUint8(10), dv.getUint8(11), dv.getUint8(12)]
-					//console.debug("pixel", "\npos", pos, "\ncol", col);
-					SpanDex.PutPixelAtPos(pos, col, true);
-					break;
-				case SpanDex.MsgTypesServer.PIX_SendBatch:
-					var len = dv.getUint16(1)
-					//console.debug("pixel batch", "\nlength", len);
+					var origin = [dv.getInt32(1), dv.getInt32(5)]
+					var len = dv.getUint16(9)
+					//console.debug("pixel batch", "\norigin", origin, "\nlength", len);
 					
-					var offset = 3
-					for (var i = 0; i < len; i++, offset += 12) {
-						var pos = [dv.getInt32(offset+0), dv.getInt32(offset+4)]
-						var col = [dv.getUint8(offset+8), dv.getUint8(offset+9), dv.getUint8(offset+10), dv.getUint8(offset+11)]
+					var offset = 11
+					for (var i = 0; i < len; i++, offset += 8) {
+						var pos = [dv.getInt16(offset+0), dv.getInt16(offset+2)]
+						var col = [dv.getUint8(offset+4), dv.getUint8(offset+5), dv.getUint8(offset+6), dv.getUint8(offset+7)]
 					
-						SpanDex.PutPixelAtPos(pos, col, true);
+						//console.debug("pixel", "\npos", pos, "\ncol", col);
+						SpanDex.PutPixelAtPos([origin[0] + pos[0], origin[1] + pos[1]], col, true);
 					}
 					break;
 				case SpanDex.MsgTypesServer.PIX_SendRect:
@@ -239,12 +240,21 @@ class WebSock {
 						for (var x = pos[1]; x < pos[1] + wh[0]; x++)
 							SpanDex.PutPixelAtPos([x, y], col, true);
 					break;
-				case SpanDex.MsgTypesServer.PIX_Erase:
-					var pos = [dv.getInt32(1), dv.getInt32(5)]
-					//console.debug("erase", "\npos", pos);
-					SpanDex.PutPixelAtPos(pos, null, true);
+				case SpanDex.MsgTypesServer.PIX_SendErase:
+					var origin = [dv.getInt32(1), dv.getInt32(5)]
+					var len = dv.getUint16(9)
+					//console.debug("erase batch", "\norigin", origin, "\nlength", len);
+
+					var offset = 11
+					for (var i = 0; i < len; i++, offset += 4) {
+						var pos = [dv.getInt16(offset + 0), dv.getInt16(offset + 2)]
+						pos = [origin[0] + pos[0], origin[1] + pos[1]]
+					
+						//console.debug("erase", "\npos", pos);
+						SpanDex.PutPixelAtPos(pos, null, true, true);
+					}
 					break;
-				case SpanDex.MsgTypesServer.PIX_EraseRect:
+				case SpanDex.MsgTypesServer.PIX_SendEraseRect:
 					var pos = [dv.getInt32(1), dv.getInt32(5)]
 					var wh = [dv.getUint16(9), dv.getUint16(11)]
 					//console.debug("erase rect", "\npos", pos, "\nwh", wh);
@@ -336,7 +346,7 @@ class SpanDex {
 		/*if (col.startsWith("#00"))
 			return;*/
 
-		//console.debug("pos", pos, "\ncol", (col == null ? "(erasing)" : col), "\nclearing?", clear);
+		//console.debug("pos", pos, "\ncol", (col == null ? "(erasing)" : col), "\nclearing before?", clear);
 
 		if (fromSrv || SpanDex.localDrawing) {
 			let tileCoord = [Math.floor(pos[0] / SpanDex.tileSize), Math.floor(pos[1] / SpanDex.tileSize)];
@@ -382,18 +392,21 @@ class SpanDex {
 
 		// tell the network
 		if (!fromSrv) {
-			let msg = new Uint8Array(13);
+			let msg = new Uint8Array(19);
 			let dv = new DataView(msg.buffer);
 			dv.setUint8(0, SpanDex.MsgTypesClient.PIX_Put);
 			dv.setInt32(1, pos[0]);
 			dv.setInt32(5, pos[1]);
+			dv.setUint16(9, 1);
 
 			let colArr = hextoByteArr(col);
 
-			dv.setUint8(9, colArr[0]);
-			dv.setUint8(10, colArr[1]);
-			dv.setUint8(11, colArr[2]);
-			dv.setUint8(12, colArr[3]);
+			dv.setInt16(11, 0);
+			dv.setInt16(13, 0);
+			dv.setUint8(15, colArr[1]);
+			dv.setUint8(16, colArr[1]);
+			dv.setUint8(17, colArr[2]);
+			dv.setUint8(18, colArr[3]);
 			WebSock.SendMessage(msg);
 		}
 	}
@@ -412,10 +425,9 @@ SpanDex.MsgTypesClient = Object.freeze({
 	SYS_Ping: 0b0_000_000,
 
 	PIX_Put: 0b0_001_000,
-	PIX_PutBatch: 0b0_001_001,
-	PIX_PutRect: 0b0_001_010,
-	PIX_Erase: 0b0_001_011,
-	PIX_EraseRect: 0b0_001_100,
+	PIX_PutRect: 0b0_001_001,
+	PIX_Erase: 0b0_001_010,
+	PIX_EraseRect: 0b0_001_011,
 
 	TIL_Get: 0b0_010_000,
 });
@@ -425,10 +437,9 @@ SpanDex.MsgTypesServer = Object.freeze({
 	SYS_Config: 0b1_000_001,
 
 	PIX_Send: 0b1_001_000,
-	PIX_SendBatch: 0b1_001_001,
-	PIX_SendRect: 0b1_001_010,
-	PIX_SendErase: 0b1_001_011,
-	PIX_SendEraseRect: 0b1_001_100,
+	PIX_SendRect: 0b1_001_001,
+	PIX_SendErase: 0b1_001_010,
+	PIX_SendEraseRect: 0b1_001_011,
 
 	TIL_Send: 0b1_010_000,
 });

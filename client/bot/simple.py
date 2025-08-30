@@ -16,10 +16,9 @@ class MsgTypesClient:
 	SYS_Ping = 0b0_000_000
 
 	PIX_Put = 0b0_001_000
-	PIX_PutBatch = 0b0_001_001
-	PIX_PutRect = 0b0_001_010
-	PIX_Erase = 0b0_001_011
-	PIX_EraseRect = 0b0_001_100
+	PIX_PutRect = 0b0_001_001
+	PIX_Erase = 0b0_001_010
+	PIX_EraseRect = 0b0_001_011
 
 	TIL_Get = 0b0_010_000
 
@@ -32,49 +31,36 @@ async def send(websocket, message):
 	except ConnectionClosed:
 		pass
 
-async def sendTupleBatch(batch, eraseTransparencies = False):
+async def sendTupleBatch(origin, batch, eraseTransparencies = False):
 	async with websockets.connect("ws://localhost:5702") as websocket:
 		print("new websocket")
 		config = await websocket.recv()
 
-		#if eraseTransparencies:
-		#	for b in batch:
-		#		if b[5] != 0xFF and b[5] != 0x00: # if alpha
-		#			await send(websocket, makeEraseMessage(b[0], b[1]))
+		if eraseTransparencies:
+			transparencies = [b for b in batch if b[5] != 0xFF and b[5] != 0x00]
+			await send(websocket, makeEraseMessage(origin, transparencies))
 
-		await send(websocket, makePixelBatchMessage(batch))
+		await send(websocket, makePixelMessage(origin, batch))
 		await asyncio.sleep(1)
 		print("socket done sending chunk, maybe wait")
 
-def makePixelMessage(x, y, r, g, b, a):
-	type = MsgTypesClient.PIX_Put
-	tileData = type.to_bytes(1)
-
-	tileData += int(x).to_bytes(4, signed=True)
-	tileData += int(y).to_bytes(4, signed=True)
-
-	tileData += int(r).to_bytes(1)
-	tileData += int(g).to_bytes(1)
-	tileData += int(b).to_bytes(1)
-	tileData += int(a).to_bytes(1)
-	
-	return tileData
-
-def makePixelBatchMessage(batch):
-	type = MsgTypesClient.PIX_PutBatch
-	tileData = type.to_bytes(1)
-
+def makePixelMessage(origin, batch):
 	if len(batch) > 0x4000:
 		print("oops, too many for a batch!")
 		return None
 
+	type = MsgTypesClient.PIX_Put
+	tileData = type.to_bytes(1)
+
+	tileData += origin[0].to_bytes(4, signed=True)
+	tileData += origin[1].to_bytes(4, signed=True)
 	tileData += len(batch).to_bytes(2)
 
-	for b in batch:
-		x, y, r, g, b, a = b
+	for bat in batch:
+		x, y, r, g, b, a = bat
 
-		tileData += int(x).to_bytes(4, signed=True)
-		tileData += int(y).to_bytes(4, signed=True)
+		tileData += int(x).to_bytes(2, signed=True)
+		tileData += int(y).to_bytes(2, signed=True)
 
 		tileData += int(r).to_bytes(1)
 		tileData += int(g).to_bytes(1)
@@ -83,21 +69,34 @@ def makePixelBatchMessage(batch):
 	
 	return tileData
 
-def makeEraseMessage(x, y):
+def makeEraseMessage(origin, batch):
+	if len(batch) > 0x4000:
+		print("oops, too many for a batch!")
+		return None
+
 	type = MsgTypesClient.PIX_Erase
 	tileData = type.to_bytes(1)
 
-	tileData += int(x).to_bytes(4, signed=True)
-	tileData += int(y).to_bytes(4, signed=True)
+	tileData += origin[0].to_bytes(4, signed=True)
+	tileData += origin[1].to_bytes(4, signed=True)
+	tileData += len(batch).to_bytes(2)
+
+	for bat in batch:
+		x = bat[0]
+		y = bat[1]
+
+		tileData += int(x).to_bytes(2, signed=True)
+		tileData += int(y).to_bytes(2, signed=True)
 	
 	return tileData
 
-def getPixelReturnSixTuple(img, x, y, px, py):
+def getPixelReturnSixTuple(img, x, y):
 	# getting the RGB pixel value.
 	r, g, b, a = img.getpixel((x, y))
 
-	if a > 0 and a != 0xFF:
-		return (x + px, y + py, r, g, b, a)
+	#if a > 0 and a != 0xFF: # silly
+	if a > 0:
+		return (x, y, r, g, b, a)
 
 # https://github.com/qqwweee/keras-yolo3/issues/330
 def letterbox_image(image, size):
@@ -112,17 +111,17 @@ def letterbox_image(image, size):
 	new_image.paste(image, ((w-nw)//2, (h-nh)//2))
 	return new_image
 
-def METHOD_linear(img, posX, posY):
+def METHOD_linear(img):
 	width, height = img.size
 	
 	print("gathering pixels")
 	for y in range(height): 
 		for x in range(width):
-			tup = getPixelReturnSixTuple(img, x, y, posX, posY)
+			tup = getPixelReturnSixTuple(img, x, y)
 			if tup is not None:
 				SIX_TUPLE_BUFFER.append(tup)
 
-def METHOD_hilbert(img, posX, posY):
+def METHOD_hilbert(img):
 	# log2 largest dimension
 	imgDim = max(img.size)
 	log2 = int(math.log2(imgDim))
@@ -140,12 +139,11 @@ def METHOD_hilbert(img, posX, posY):
 
 	print("gathering pixels")
 	for i in range(p2*p2):
-		x, y = points[i]
-		tup = getPixelReturnSixTuple(img, x, y, posX, posY)
+		tup = getPixelReturnSixTuple(img, *points[i])
 		if tup is not None:
 			SIX_TUPLE_BUFFER.append(tup)
 
-def METHOD_random(img, posX, posY):
+def METHOD_random(img):
 	width, height = img.size
 
 	points = []
@@ -160,7 +158,7 @@ def METHOD_random(img, posX, posY):
 
 	print("gathering pixels")
 	for p in points:
-		tup = getPixelReturnSixTuple(img, *p, posX, posY)
+		tup = getPixelReturnSixTuple(img, *p)
 		if tup is not None:
 			SIX_TUPLE_BUFFER.append(tup)
 
@@ -207,17 +205,17 @@ async def main():
 	if args.batch is not None:
 		BATCH_SIZE = args.batch
 
-	x = y = 0
+	origin = (0, 0)
 	if args.position is not None:
-		x, y = (args.position[0], args.position[1])
+		origin = (args.position[0], args.position[1])
 
 	match args.method:
 		case "hilbert":
-			METHOD_hilbert(img, x, y)
+			METHOD_hilbert(img)
 		case "random":
-			METHOD_random(img, x, y)
+			METHOD_random(img)
 		case _:
-			METHOD_linear(img, x, y)
+			METHOD_linear(img)
 
 	print(len(SIX_TUPLE_BUFFER), "pixels to send")
 	print(BATCH_SIZE, "per batch,", len(SIX_TUPLE_BUFFER) // BATCH_SIZE, "batches")
@@ -230,7 +228,7 @@ async def main():
 		batch = copy.deepcopy(SIX_TUPLE_BUFFER[:BATCH_SIZE])
 		SIX_TUPLE_BUFFER = SIX_TUPLE_BUFFER[BATCH_SIZE:]
 
-		tasks.append(asyncio.create_task(sendTupleBatch(batch, True)))
+		tasks.append(asyncio.create_task(sendTupleBatch(origin, batch, True)))
 		await asyncio.sleep(0.1)
 		print(f"created task {i}...")
 		i += 1

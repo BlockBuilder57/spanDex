@@ -12,9 +12,8 @@ Categories (client/server respectively)
   - `0b--^^^001` - N/A | Config
 - `0b--001---` - Pixels (PIX)
   - `0b--^^^000` - Put | Send
-  - `0b--^^^001` - Put Batch | Send Batch
-  - `0b--^^^010` - Put Rect | Send Rect
-  - `0b--^^^011` - Put Clear | Send Clear
-  - `0b--^^^100` - Put Clear Rect | Send Clear Rect
+  - `0b--^^^001` - Put Rect | Send Rect
+  - `0b--^^^010` - Put Clear | Send Clear
+  - `0b--^^^011` - Put Clear Rect | Send Clear Rect
 - `0b--010---` - Tiles (TIL)
   - `0b--^^^000` - Get | Send

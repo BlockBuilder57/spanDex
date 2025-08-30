@@ -17,7 +17,9 @@ def LoadTilesFromFolder():
 		x = int(x)
 		y = int(y)
 		
-		LOADED_TILES[(x, y)] = Image.open(os.path.join("tiles/", f))
+		newTile = Image.open(os.path.join("tiles/", f))
+		newTile = newTile.convert("RGBA")
+		LOADED_TILES[(x, y)] = newTile
 
 def CreateTile(coord):
 	if coord in LOADED_TILES:
@@ -46,22 +48,21 @@ def CreateOnePixelForBlending(Ar, Ag, Ab, Aa, Br, Bg, Bb, Ba):
 	B = Image.new("RGBA", (1, 1), (Br, Bg, Bb, Ba))
 	return Image.alpha_composite(B, A).getpixel((0, 0))
 
-def SetPixel(x, y, r, g, b, a, obeyTransparency = True):
+def SetPixel(x, y, r, g, b, a, blendDontReplace = True):
 	existing = GetPixel(x, y)
-	#if (r, g, b) == (existing[0], existing[1], existing[2]) and existing:
-	#	return
 
 	tileCoordX, tileCoordY, tilePosX, tilePosY = PosToTileCoordAndPos(x, y)
 	returnNewPixel = False
 
 	tile = GetOrCreateTile((tileCoordX, tileCoordY))
 	if tile is not None:
-		if a != 0xFF and obeyTransparency:
+		if a != 0xFF and blendDontReplace:
 			r, g, b, a = CreateOnePixelForBlending(r, g, b, a, *existing)
 		
 		newPixels = (r, g, b, a)
 
-		if newPixels != existing:
+		# when the blended pixel is different, or we're not forcibly not blending
+		if newPixels != existing or not blendDontReplace:
 			tile.putpixel((tilePosX, tilePosY), newPixels)
 			returnNewPixel = True
 

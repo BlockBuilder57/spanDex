@@ -5,6 +5,8 @@ body {
 #map {
 	width: 100vw;
 	height: 100vh;
+
+	background: url("../img/map_bg.png");
 }
 
 .controlPanel {
