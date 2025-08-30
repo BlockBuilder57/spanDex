@@ -1,19 +1,24 @@
 import L, {Map, CRS, ImageOverlay, TileLayer, GridLayer, Control} from 'leaflet';
 
-function jankyColorGetter(col) {
-	var ctx = document.createElement("canvas").getContext("2d");
-	ctx.fillStyle = col;
-	let hex = ctx.fillStyle; // hex code version!
-	let arr = new Uint8Array(3);
-	arr.setFromHex(hex.substring(1))
-	return arr;
-}
-
-function arrToRGBHex(arr) {
+function byteArrToHex(arr) {
 	// https://stackoverflow.com/a/34310051
 	return "#" + Array.from(arr, function (byte) {
 		return ('0' + (byte & 0xFF).toString(16)).slice(-2);
 	}).join('');
+}
+
+function hextoByteArr(hex, argb) {
+	if (hex.startsWith("#"))
+		hex = hex.substring(1);
+
+	hex = hex.padStart(8, "0");
+
+	if (argb) // turn argb into rgba
+		hex = hex.substring(2, 8) + hex.substring(0, 2);
+	
+	let arr = new Uint8Array(4);
+	arr.setFromHex(hex);
+	return arr;
 }
 
 const SpanDexControl = Control.extend({
@@ -128,7 +133,9 @@ class UI {
 
 			// we'll want to clear anything outside of 5 sec, then invalidate it for later checks
 			let clear = false;
-			if (Math.abs(tile.lastDraw - Date.now()) > 5000) {
+			let diff = Math.abs(tile.lastDraw - Date.now());
+
+			if (diff > 5000) {
 				//console.debug(`clearing ${key} after ${Math.abs(tile.lastDraw - Date.now())}ms`);
 				tile.lastDraw = -1;
 				clear = true;
@@ -137,22 +144,26 @@ class UI {
 			const ctx = tile.getContext("2d");
 			let imageData = ctx.getImageData(0, 0, SpanDex.tileSize, SpanDex.tileSize);
 			for (var i = 0; i < imageData.data.length; i += 4) {
-				//imageData.data[i+3] *= clear ? 0 : 0.96;
-				imageData.data[i+3] -= clear ? 255 : 3;
+				imageData.data[i+3] = clear ? 0 : (1 - (diff / 5000));
 			}
 			ctx.putImageData(imageData, 0, 0);
 		}
 	}
 
+	// Why.
+	static RoundProperlyForPositionCoordinates(x) {
+		return x < 0 ? -Math.ceil(-x) : Math.floor(x);
+	};
+
 	static OnMapMove(e) {
 		/*let pos = UI.map.getCenter();
-		let posPixel = [Math.floor(pos.lng), -Math.floor(pos.lat)];
+		let posPixel = [UI.RoundProperlyForPositionCoordinates(pos.lng), UI.RoundProperlyForPositionCoordinates(-pos.lat)];
 		document.getElementById("txtPosition").innerText = `${posPixel}`;*/
 	}
 
 	static OnPointerMove(e) {
 		let pos = e.latlng;
-		let posPixel = [Math.floor(pos.lng), -Math.floor(pos.lat)];
+		let posPixel = [UI.RoundProperlyForPositionCoordinates(pos.lng), UI.RoundProperlyForPositionCoordinates(-pos.lat)];
 		document.getElementById("txtPosition").innerText = `${posPixel}`;
 	}
 
@@ -162,6 +173,7 @@ class UI {
 
 		// this is what Leaflet does lol
 		let key = `${coord[0]}:${coord[1]}:0`;
+		//console.debug("GetCanvasTileAtCoord", key);
 		if (key in canvasLayer._tiles)
 			return canvasLayer._tiles[key].el;
 	}
@@ -194,12 +206,54 @@ class WebSock {
 			let dv = new DataView(msg.buffer);
 
 			switch(msg[0]) {
-				case 0b1000001:
+				case SpanDex.MsgTypesServer.SYS_Config:
 					SpanDex.tileSize = dv.getUint16(1);
 					//console.debug("config", "\ntileSize", SpanDex.tileSize);
 					UI.Initialize();
 					break;
-				case 0b1010001:
+				case SpanDex.MsgTypesServer.PIX_Send:
+					var pos = [dv.getInt32(1), dv.getInt32(5)]
+					var col = [dv.getUint8(9), dv.getUint8(10), dv.getUint8(11), dv.getUint8(12)]
+					//console.debug("pixel", "\npos", pos, "\ncol", col);
+					SpanDex.PutPixelAtPos(pos, col, true);
+					break;
+				case SpanDex.MsgTypesServer.PIX_SendBatch:
+					var len = dv.getUint16(1)
+					//console.debug("pixel batch", "\nlength", len);
+					
+					var offset = 3
+					for (var i = 0; i < len; i++, offset += 12) {
+						var pos = [dv.getInt32(offset+0), dv.getInt32(offset+4)]
+						var col = [dv.getUint8(offset+8), dv.getUint8(offset+9), dv.getUint8(offset+10), dv.getUint8(offset+11)]
+					
+						SpanDex.PutPixelAtPos(pos, col, true);
+					}
+					break;
+				case SpanDex.MsgTypesServer.PIX_SendRect:
+					var pos = [dv.getInt32(1), dv.getInt32(5)]
+					var wh = [dv.getUint16(9), dv.getUint16(11)]
+					var col = [dv.getUint8(13), dv.getUint8(14), dv.getUint8(15), dv.getUint8(16)]
+					//console.debug("pixel rect", "\npos", pos, "\nwh", wh, "\ncol", col);
+					
+					for (var y = pos[0]; y < pos[0] + wh[1]; y++)
+						for (var x = pos[1]; x < pos[1] + wh[0]; x++)
+							SpanDex.PutPixelAtPos([x, y], col, true);
+					break;
+				case SpanDex.MsgTypesServer.PIX_Erase:
+					var pos = [dv.getInt32(1), dv.getInt32(5)]
+					//console.debug("erase", "\npos", pos);
+					SpanDex.PutPixelAtPos(pos, null, true);
+					break;
+				case SpanDex.MsgTypesServer.PIX_EraseRect:
+					var pos = [dv.getInt32(1), dv.getInt32(5)]
+					var wh = [dv.getUint16(9), dv.getUint16(11)]
+					//console.debug("erase rect", "\npos", pos, "\nwh", wh);
+					
+					for (var y = pos[0]; y < pos[0] + wh[1]; y++)
+						for (var x = pos[1]; x < pos[1] + wh[0]; x++)
+							SpanDex.PutPixelAtPos([x, y], null, true);
+					break;
+				case SpanDex.MsgTypesServer.TIL_Send:
 					var coord = [dv.getInt32(1), dv.getInt32(5)]
 					//console.debug("tile", coord);
 					var canv = UI.GetCanvasTileAtCoord(coord)
@@ -211,24 +265,6 @@ class WebSock {
 							imageData.data[i-startOffset] = dv.getUint8(i);
 						}
 						ctx.putImageData(imageData, 0, 0);
-					}
-					break;
-				case 0b1001001:
-					var pos = [dv.getInt32(1), dv.getInt32(5)]
-					var col = [dv.getUint8(9), dv.getUint8(10), dv.getUint8(11), dv.getUint8(12)]
-					//console.debug("pixel", "\npos", pos, "\ncol", col);
-					SpanDex.PutColorAtPos(pos, col, true);
-					break;
-				case 0b1001010:
-					var len = dv.getUint16(1)
-					//console.debug("pixel batch", "\nlength", len);
-					
-					var offset = 3
-					for (var i = 0; i < len; i++, offset += 12) {
-						var pos = [dv.getInt32(offset+0), dv.getInt32(offset+4)]
-						var col = [dv.getUint8(offset+8), dv.getUint8(offset+9), dv.getUint8(offset+10), dv.getUint8(offset+11)]
-					
-						SpanDex.PutColorAtPos(pos, col, true);
 					}
 					break;
 				default:
@@ -246,15 +282,18 @@ class WebSock {
 };
 
 class Paint {
-	// http://www.softwareandfinance.com/Turbo_C/DrawCircle.html
-	static DrawCircle(x, y, radius, col) {
-		for (let i = 0; i < 360; i += 0.1)
-		{
-			let x1 = radius * Math.cos(i * Math.PI / 180.0);
-			let y1 = radius * Math.sin(i * Math.PI / 180.0);
-
-			SpanDex.PutColorAtPos([x + x1, y + y1], col);
-		}
+	// https://zingl.github.io/bresenham.html
+	static DrawCircle(xm, ym, r, col) {
+		let x = -r, y = 0, err = 2-2*r; /* II. Quadrant */ 
+		do {
+			SpanDex.PutPixelAtPos([xm-x, ym+y], col); /*   I. Quadrant */
+			SpanDex.PutPixelAtPos([xm-y, ym-x], col); /*  II. Quadrant */
+			SpanDex.PutPixelAtPos([xm+x, ym-y], col); /* III. Quadrant */
+			SpanDex.PutPixelAtPos([xm+y, ym+x], col); /*  IV. Quadrant */
+			r = err;
+			if (r <= y) err += ++y*2+1;           /* e_xy+e_y < 0 */
+			if (r > x || err > y) err += ++x*2+1; /* e_xy+e_x > 0 or no 2nd y-step */
+		} while (x < 0);
 	}
 }
 
@@ -262,7 +301,7 @@ class SpanDex {
 	static Initialize() {
 		console.log("<span>Dex init");
 		this.tileSize = 512;
-		this.localDrawing = false;
+		this.localDrawing = true;
 		this.debug = true;
 		//this.testInterval = setInterval(this.TestInterval, 10);
 	}
@@ -274,17 +313,30 @@ class SpanDex {
 			let x = Math.floor(((Math.random() * 2) - 1) * multy);
 			let y = Math.floor(((Math.random() * 2) - 1) * multy);
 
-			SpanDex.PutColorAtPos([y, x], "#0047ab");
+			SpanDex.PutPixelAtPos([x, y], 0xff0047ab);
 		}
 	}
 
-	static PutColorAtPos(pos, col, fromSrv) {
+	static PutPixelAtPos(pos, col, fromSrv = false, clear = true) {
 		// find tile pos
-		//console.debug(pos, col);
 
-		if (col instanceof Array) {
-			col = arrToRGBHex(col);
+		let erase = false;
+		if (col instanceof Array || (col instanceof Uint8Array && col.length == 4) || (col instanceof Uint32Array && col.length == 1))
+			col = byteArrToHex(col);
+		else if (typeof(col) === "number")
+			col = byteArrToHex(hextoByteArr(col.toString(16), true));
+		else if (col == null)
+			erase = true;
+		else {
+			console.error("invalid color value! ARGB hex number, a Uint8Array/byte array of length 4 | Uint32Array of length 1, or null only!");
+			return;
 		}
+
+		// col will always be #aarrggbb here, so if the alpha byte is 00 we don't draw anything!
+		/*if (col.startsWith("#00"))
+			return;*/
+
+		//console.debug("pos", pos, "\ncol", (col == null ? "(erasing)" : col), "\nclearing?", clear);
 
 		if (fromSrv || SpanDex.localDrawing) {
 			let tileCoord = [Math.floor(pos[0] / SpanDex.tileSize), Math.floor(pos[1] / SpanDex.tileSize)];
@@ -307,8 +359,13 @@ class SpanDex {
 				ctx.putImageData(imageData, tilePos[0], tilePos[1]);*/
 
 				ctx.fillStyle = col;
-				ctx.clearRect(tilePos[0], tilePos[1], 1, 1);
-				ctx.fillRect(tilePos[0], tilePos[1], 1, 1);
+
+				if (clear)
+					ctx.clearRect(tilePos[0], tilePos[1], 1, 1);
+
+				if (!erase)
+					ctx.fillRect(tilePos[0], tilePos[1], 1, 1);
+				
 				//console.debug("put pixel at", tilePos);
 			}
 
@@ -324,18 +381,19 @@ class SpanDex {
 		}
 
 		// tell the network
-		if (!fromSrv && !SpanDex.localDrawing) {
-			let msg = new Uint8Array(12);
+		if (!fromSrv) {
+			let msg = new Uint8Array(13);
 			let dv = new DataView(msg.buffer);
-			dv.setUint8(0, 0b0001001);
+			dv.setUint8(0, SpanDex.MsgTypesClient.PIX_Put);
 			dv.setInt32(1, pos[0]);
 			dv.setInt32(5, pos[1]);
 
-			let colArr = jankyColorGetter(col);
+			let colArr = hextoByteArr(col);
 
 			dv.setUint8(9, colArr[0]);
 			dv.setUint8(10, colArr[1]);
 			dv.setUint8(11, colArr[2]);
+			dv.setUint8(12, colArr[3]);
 			WebSock.SendMessage(msg);
 		}
 	}
@@ -343,12 +401,37 @@ class SpanDex {
 	static GetTile(coord) {
 		let msg = new Uint8Array(9);
 		let dv = new DataView(msg.buffer);
-		dv.setUint8(0, 0b0010001);
+		dv.setUint8(0, SpanDex.MsgTypesClient.TIL_Get);
 		dv.setInt32(1, coord.x);
 		dv.setInt32(5, coord.y);
 		WebSock.SendMessage(msg);
 	}
 };
+
+SpanDex.MsgTypesClient = Object.freeze({
+	SYS_Ping: 0b0_000_000,
+
+	PIX_Put: 0b0_001_000,
+	PIX_PutBatch: 0b0_001_001,
+	PIX_PutRect: 0b0_001_010,
+	PIX_Erase: 0b0_001_011,
+	PIX_EraseRect: 0b0_001_100,
+
+	TIL_Get: 0b0_010_000,
+});
+
+SpanDex.MsgTypesServer = Object.freeze({
+	SYS_Pong: 0b1_000_000,
+	SYS_Config: 0b1_000_001,
+
+	PIX_Send: 0b1_001_000,
+	PIX_SendBatch: 0b1_001_001,
+	PIX_SendRect: 0b1_001_010,
+	PIX_SendErase: 0b1_001_011,
+	PIX_SendEraseRect: 0b1_001_100,
+
+	TIL_Send: 0b1_010_000,
+});
 
 document.addEventListener("DOMContentLoaded", () => {
 	SpanDex.Initialize();

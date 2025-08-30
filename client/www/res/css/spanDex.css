@@ -1,20 +1,17 @@
 body {
-    margin: 0;
+	margin: 0;
 }
 
 #map {
-    width: 100vw;
-    height: 100vh;
+	width: 100vw;
+	height: 100vh;
 }
 
 .controlPanel {
-    border: 2px solid black;
-    border-radius: 8px;
-
-    background: rgba(255, 255, 255, 0.8);
-    padding: 0.5em;
+	background: rgba(255, 255, 255, 0.8);
+	padding: 0.5em;
 }
 
 .pointFiltered {
-    image-rendering: pixelated;
+	image-rendering: pixelated;
 }

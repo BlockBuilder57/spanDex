@@ -26,20 +26,35 @@ async def broadcast(message):
 		asyncio.create_task(send(websocket, message))
 
 def pixHandler(x, y, r, g, b, a):
-	msg = messages.makeServerMessage(0b1001001, x, y, r, g, b, a)
+	msg = messages.makeServerMessage(messages.MsgTypesServer.PIX_Send, x, y, r, g, b, a)
 	asyncio.create_task(broadcast(msg))
 
 def pixBatchHandler(batch):
-	msg = messages.makeServerMessage(0b1001010, batch)
+	msg = messages.makeServerMessage(messages.MsgTypesServer.PIX_SendBatch, batch)
+	asyncio.create_task(broadcast(msg))
+
+def pixRectHandler(x, y, w, h, r, g, b, a):
+	msg = messages.makeServerMessage(messages.MsgTypesServer.PIX_SendRect, x, y, w, h, r, g, b, a)
+	asyncio.create_task(broadcast(msg))
+
+def pixEraseHandler(x, y):
+	msg = messages.makeServerMessage(messages.MsgTypesServer.PIX_SendErase, x, y)
+	asyncio.create_task(broadcast(msg))
+
+def pixEraseRectHandler(x, y, w, h):
+	msg = messages.makeServerMessage(messages.MsgTypesServer.PIX_SendEraseRect, x, y, w, h)
 	asyncio.create_task(broadcast(msg))
 
 messages.PIXEL_HANDLER = pixHandler
 messages.PIXEL_BATCH_HANDLER = pixBatchHandler
+messages.PIXEL_RECT_HANDLER = pixRectHandler
+messages.PIXEL_ERASE_HANDLER = pixEraseHandler
+messages.PIXEL_ERASE_RECT_HANDLER = pixEraseRectHandler
 
 async def handle(websocket):
 	CLIENTS.add(websocket)
 	try:
-		await websocket.send(messages.makeServerMessage(0b1000001))
+		await websocket.send(messages.makeServerMessage(messages.MsgTypesServer.SYS_Config))
 
 		async for message in websocket:
 			resp = messages.handleClientMessage(message)

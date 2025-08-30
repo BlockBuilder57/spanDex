@@ -31,26 +31,47 @@ def GetOrCreateTile(coord):
 		CreateTile(coord)
 	return LOADED_TILES[coord]
 
-def SetPixel(x, y, r, g, b, a):
+def PosToTileCoordAndPos(x, y):
 	tileCoordX = x // TILE_SIZE
 	tileCoordY = y // TILE_SIZE
 	tilePosX = x % TILE_SIZE
 	tilePosX = TILE_SIZE + tilePosX if tilePosX < 0 else tilePosX
 	tilePosY = y % TILE_SIZE
 	tilePosY = TILE_SIZE + tilePosY if tilePosY < 0 else tilePosY
+
+	return (tileCoordX, tileCoordY, tilePosX, tilePosY)
+
+def CreateOnePixelForBlending(Ar, Ag, Ab, Aa, Br, Bg, Bb, Ba):
+	A = Image.new("RGBA", (1, 1), (Ar, Ag, Ab, Aa))
+	B = Image.new("RGBA", (1, 1), (Br, Bg, Bb, Ba))
+	return Image.alpha_composite(B, A).getpixel((0, 0))
+
+def SetPixel(x, y, r, g, b, a, obeyTransparency = True):
+	existing = GetPixel(x, y)
+	#if (r, g, b) == (existing[0], existing[1], existing[2]) and existing:
+	#	return
+
+	tileCoordX, tileCoordY, tilePosX, tilePosY = PosToTileCoordAndPos(x, y)
+	returnNewPixel = False
 
 	tile = GetOrCreateTile((tileCoordX, tileCoordY))
 	if tile is not None:
-		tile.putpixel((tilePosX, tilePosY), (r, g, b, a))
+		if a != 0xFF and obeyTransparency:
+			r, g, b, a = CreateOnePixelForBlending(r, g, b, a, *existing)
+		
+		newPixels = (r, g, b, a)
+
+		if newPixels != existing:
+			tile.putpixel((tilePosX, tilePosY), newPixels)
+			returnNewPixel = True
+
 		MODIFIED_TILES[(tileCoordX, tileCoordY)] = tile
 
+	if returnNewPixel:
+		return newPixels
+
 def GetPixel(x, y):
-	tileCoordX = x // TILE_SIZE
-	tileCoordY = y // TILE_SIZE
-	tilePosX = x % TILE_SIZE
-	tilePosX = TILE_SIZE + tilePosX if tilePosX < 0 else tilePosX
-	tilePosY = y % TILE_SIZE
-	tilePosY = TILE_SIZE + tilePosY if tilePosY < 0 else tilePosY
+	tileCoordX, tileCoordY, tilePosX, tilePosY = PosToTileCoordAndPos(x, y)
 
 	tile = GetOrCreateTile((tileCoordX, tileCoordY))
 	if tile is not None:

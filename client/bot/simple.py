@@ -12,6 +12,17 @@ import websockets
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 from websockets.connection import State
 
+class MsgTypesClient:
+	SYS_Ping = 0b0_000_000
+
+	PIX_Put = 0b0_001_000
+	PIX_PutBatch = 0b0_001_001
+	PIX_PutRect = 0b0_001_010
+	PIX_Erase = 0b0_001_011
+	PIX_EraseRect = 0b0_001_100
+
+	TIL_Get = 0b0_010_000
+
 async def send(websocket, message):
 	if websocket.state != State.OPEN:
 		return
@@ -21,17 +32,22 @@ async def send(websocket, message):
 	except ConnectionClosed:
 		pass
 
-async def sendTupleBatch(batch):
+async def sendTupleBatch(batch, eraseTransparencies = False):
 	async with websockets.connect("ws://localhost:5702") as websocket:
 		print("new websocket")
 		config = await websocket.recv()
 
+		#if eraseTransparencies:
+		#	for b in batch:
+		#		if b[5] != 0xFF and b[5] != 0x00: # if alpha
+		#			await send(websocket, makeEraseMessage(b[0], b[1]))
+
 		await send(websocket, makePixelBatchMessage(batch))
-		#await asyncio.sleep(1)
+		await asyncio.sleep(1)
 		print("socket done sending chunk, maybe wait")
 
 def makePixelMessage(x, y, r, g, b, a):
-	type = 0b0001001
+	type = MsgTypesClient.PIX_Put
 	tileData = type.to_bytes(1)
 
 	tileData += int(x).to_bytes(4, signed=True)
@@ -45,7 +61,7 @@ def makePixelMessage(x, y, r, g, b, a):
 	return tileData
 
 def makePixelBatchMessage(batch):
-	type = 0b0001010
+	type = MsgTypesClient.PIX_PutBatch
 	tileData = type.to_bytes(1)
 
 	if len(batch) > 0x4000:
@@ -67,11 +83,21 @@ def makePixelBatchMessage(batch):
 	
 	return tileData
 
+def makeEraseMessage(x, y):
+	type = MsgTypesClient.PIX_Erase
+	tileData = type.to_bytes(1)
+
+	tileData += int(x).to_bytes(4, signed=True)
+	tileData += int(y).to_bytes(4, signed=True)
+	
+	return tileData
+
 def getPixelReturnSixTuple(img, x, y, px, py):
 	# getting the RGB pixel value.
 	r, g, b, a = img.getpixel((x, y))
 
-	return (x + px, y + py, r, g, b, a)
+	if a > 0 and a != 0xFF:
+		return (x + px, y + py, r, g, b, a)
 
 # https://github.com/qqwweee/keras-yolo3/issues/330
 def letterbox_image(image, size):
@@ -93,7 +119,7 @@ def METHOD_linear(img, posX, posY):
 	for y in range(height): 
 		for x in range(width):
 			tup = getPixelReturnSixTuple(img, x, y, posX, posY)
-			if tup[5] > 0: # alpha
+			if tup is not None:
 				SIX_TUPLE_BUFFER.append(tup)
 
 def METHOD_hilbert(img, posX, posY):
@@ -116,7 +142,7 @@ def METHOD_hilbert(img, posX, posY):
 	for i in range(p2*p2):
 		x, y = points[i]
 		tup = getPixelReturnSixTuple(img, x, y, posX, posY)
-		if tup[5] > 0: # alpha
+		if tup is not None:
 			SIX_TUPLE_BUFFER.append(tup)
 
 def METHOD_random(img, posX, posY):
@@ -135,16 +161,17 @@ def METHOD_random(img, posX, posY):
 	print("gathering pixels")
 	for p in points:
 		tup = getPixelReturnSixTuple(img, *p, posX, posY)
-		if tup[5] > 0: # alpha
+		if tup is not None:
 			SIX_TUPLE_BUFFER.append(tup)
 
 async def main():
 	parser = argparse.ArgumentParser(description="Simple bot")
 	parser.add_argument("file", help="Image file to print.", type=str)
 	parser.add_argument("-m", "--method", help="Index method", type=str)
-	parser.add_argument("-s", "--scale", help="Overall scale (applied first)", type=float)
-	parser.add_argument("-f", "--fit", help="Fit to a box (2 args)", type=int, nargs=2)
-	parser.add_argument("-r", "--resize", help="Resize", type=int, nargs=2)
+	parser.add_argument("-c", "--crop", help="Crop the image (l,t,r,b) (#1)", type=int, nargs=4)
+	parser.add_argument("-s", "--scale", help="Overall scale (#2)", type=float)
+	parser.add_argument("-f", "--fit", help="Fit to a box (2 args) (#3)", type=int, nargs=2)
+	parser.add_argument("-r", "--resize", help="Resize (#4)", type=int, nargs=2)
 	parser.add_argument("-b", "--batch", help="Batch size override", type=int)
 	parser.add_argument("-p", "--position", help="Canvas position", type=int, nargs=2)
 	args = parser.parse_args()
@@ -156,12 +183,16 @@ async def main():
 	
 	width, height = img.size
 
+	if args.crop is not None:
+		img = img.crop((args.crop[0], args.crop[1], args.crop[2], args.crop[3]))
+		width, height = img.size
+
 	if args.scale is not None:
+		width *= args.scale
+		height *= args.scale
 		img = img.resize((int(width), int(height)))
 
 	if args.fit is not None:
-		# does cropping, not scaling!
-		#img = ImageOps.fit(img, (args.fit[0], args.fit[1]))
 		img = letterbox_image(img, (args.fit[0], args.fit[1]))
 		width, height = img.size
 	
@@ -172,7 +203,7 @@ async def main():
 	global SIX_TUPLE_BUFFER
 	SIX_TUPLE_BUFFER = []
 
-	BATCH_SIZE = min(0x4000, width*height)
+	BATCH_SIZE = int(min(0x4000, width*height))
 	if args.batch is not None:
 		BATCH_SIZE = args.batch
 
@@ -199,8 +230,8 @@ async def main():
 		batch = copy.deepcopy(SIX_TUPLE_BUFFER[:BATCH_SIZE])
 		SIX_TUPLE_BUFFER = SIX_TUPLE_BUFFER[BATCH_SIZE:]
 
-		tasks.append(asyncio.create_task(sendTupleBatch(batch)))
-		await asyncio.sleep(0.001)
+		tasks.append(asyncio.create_task(sendTupleBatch(batch, True)))
+		await asyncio.sleep(0.1)
 		print(f"created task {i}...")
 		i += 1
 
